@@ -1,0 +1,350 @@
+---
+title: "Final_project_432"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(caret)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+```
+
+## Summary Statistics, data processing and unsupervised learning
+```{r}
+fashion_train = read.csv("/Users/lixinjin/Desktop/STAT432/FINAL PROJECT/fashion-mnist_train.csv")
+fashion_test = read.csv("/Users/lixinjin/Desktop/STAT432/FINAL PROJECT/fashion-mnist_test.csv")
+#fashion_train$label = as.factor(fashion_train$label)
+#fashion_test$label = as.factor(fashion_test$label)
+```
+
+```{r}
+fashion_train_2000 = sample_n(fashion_train, 2000)
+fashion_test_2000 = sample_n(fashion_test, 1000)
+```
+
+
+```{r}
+# check missing values
+dim(fashion_train_2000)
+dim(fashion_test_2000)
+```
+
+
+```{r}
+train_freq_table = table(fashion_train_2000$label)
+train_freq_table
+```
+```{r}
+test_freq_table = table(fashion_test_2000$label)
+test_freq_table
+```
+```{r}
+# PCA
+fashion_train_pc = prcomp(fashion_train_2000[,-1])
+train_pc_sum = summary(fashion_train_pc)
+```
+
+
+```{r}
+df_pca <- data.frame(t(train_pc_sum$importance))
+df_pca$compnum <- 1:(dim(fashion_train_2000)-1)[2]
+# How many components account for 95% of the variance in the data?
+comp95 <- min(which(df_pca$Cumulative.Proportion>=0.95))
+comp95
+```
+
+
+```{r}
+plot(fashion_train_pc, type = "l", pch = 19, main = "PCA Variance")
+library(ggplot2)
+library(colorspace)
+library(tidyr)
+ggplot(data = data.frame(fashion_train_pc$x), aes(x=PC1, y=PC2)) +
+  geom_point(color = rainbow_hcl(10)[fashion_train_2000[,1]+1], size = 1)
+```
+
+# clustering
+
+```{r}
+library(tidyverse)  # Data manipulation. 
+library(factoextra) # Clustering visualization. 
+
+fashion_train_subset = fashion_train_2000
+fashion_train_subset$label = as.factor(fashion_train_subset$label)
+
+fashion_train_subset_var = fashion_train_subset %>% summarise_if(is.numeric, var)
+train_162 = t(apply(fashion_train_subset_var, 1, function(row_i){sort(row_i, decreasing = TRUE)[1:162]})) 
+train = fashion_train_subset[, (colnames(fashion_train_subset) %in% colnames(train_162))]
+
+train_hc <- hclust(dist(train[, -1]), method = "ward.D2")
+plot(train_hc, hang = -1) # looks like three clusters
+```
+```{r}
+library(extrafont)
+my_font <- "Times New Roman"
+
+# Create a draft of dendrogram by using fviz_dend() function: 
+
+fviz_dend(train_hc, 
+          k = 10,   
+          cex = 0.5, 
+          rect = TRUE, 
+          rect_fill = TRUE, 
+          horiz = FALSE, 
+          palette = "jco", 
+          rect_border = "jco", 
+          color_labels_by_k = TRUE) -> basic_plot
+```
+```{r}
+basic_plot + 
+  theme_gray() + 
+  theme(plot.margin = unit(rep(0.7, 4), "cm")) + 
+  theme(text = element_text(family = my_font)) + 
+  labs(title = "Dendrogram based on Hierarchical Clustering", 
+       caption = "For Fashion MNIST Training Dataset")
+```
+
+
+
+```{r}
+# Cut tree into 4 groups: 
+sub_grp <- cutree(train_hc, k = 10)
+
+# Create plot of clusters: 
+fviz_cluster(list(data = train, cluster = paste0("Label", sub_grp)), 
+             alpha = 1, 
+             palette = "jco", 
+             labelsize = 9, 
+             ellipse.type = "norm") -> cluster_plot
+
+# Decorate the plot: 
+cluster_plot + 
+  theme(legend.position = c(0.1, 0.8)) + 
+  theme(plot.margin = unit(rep(0.5, 4), "cm")) + 
+  theme(text = element_text(family = my_font)) + 
+  labs(title = "Cluster based on Hierarchical Clustering")
+```
+
+
+## Binary Classification: Coat vs. Shirt
+
+```{r}
+# Binary Classification: 4 and 6 labels
+```
+
+
+```{r}
+train_binary = subset(fashion_train_2000, label==4 | label==6)
+train_binary$label = as.factor(train_binary$label)
+
+test_binary = subset(fashion_test_2000, label==4 | label==6) # get 4 and 6
+test_binary$label = as.factor(test_binary$label)
+
+allvar = apply(train_binary[, -1], 2, var)
+cut = sort(allvar, decreasing = TRUE)[50]
+binary_train_100 = train_binary[, -(which(allvar < cut)+1)]
+
+binary_test_100 = test_binary[, -(which(allvar < cut)+1)]
+
+```
+
+
+```{r}
+# regular logistic start
+binary_logistic.fit <- glm(label ~ ., data = binary_train_100, family = binomial)
+binary_predict = predict(binary_logistic.fit, newdata = binary_test_100, type = "response")
+```
+
+
+```{r}
+cutoff = seq(0.1, 0.5, 0.01)
+num = length(cutoff)
+logistic_accuracy <- c()
+for (i in 1:num) {
+  logistic_table = table(binary_predict > cutoff[i], binary_test_100$label) # cutoff
+  logistic_accuracy[i] = (logistic_table[1,1]+logistic_table[2,2])/sum(logistic_table)
+} 
+
+plot(cutoff, logistic_accuracy, type="l", col="blue", lwd=5, xlab="cut off", ylab="pred accuracy", main="cut off vs. accuracy")
+max(logistic_accuracy) # best accuracy for regular logistic
+cutoff[which.max(logistic_accuracy)]
+```
+
+
+
+```{r}
+library(ROCR) # 1 - specificity (false positive rate) versus the sensitivity (true positive rate)
+roc <- prediction(binary_predict, binary_test_100$label)
+# calculates the ROC curve
+perf <- performance(roc,"tpr","fpr")
+plot(perf,colorize=TRUE)
+```
+
+```{r}
+performance(roc, measure = "auc")@y.values[[1]]
+```
+
+
+```{r}
+# penalized logistic: using lasso
+library(glmnet)
+## Loading required package: Matrix
+## Loaded glmnet 4.1-3
+lasso.fit = cv.glmnet(x = data.matrix(train_binary[,- 1]), y=as.numeric(train_binary$label), nfold = 10, family = "binomial")
+plot(lasso.fit)
+```
+
+```{r}
+logistic_penalize_pred = predict(lasso.fit, newx = data.matrix(test_binary[,- 1]), s = "lambda.min", type = "response")
+table(logistic_penalize_pred > 0.5, as.factor(test_binary$label))
+
+cutoff_penalize = seq(0.1, 0.5, 0.01)
+num_penalize = length(cutoff_penalize)
+logistic_accuracy_penalize <- c()
+for (i in 1:num_penalize) {
+  logistic_table = table(logistic_penalize_pred > cutoff_penalize[i], test_binary$label)
+  logistic_accuracy_penalize[i] = (logistic_table[1,1]+logistic_table[2,2])/sum(logistic_table)
+}
+
+max(logistic_accuracy_penalize) # best accuracy for regular logistic
+cutoff_penalize[which.max(logistic_accuracy_penalize)]
+```
+penalize lasso in logistic classification gives higher accuracy. 
+
+```{r}
+roc <- prediction(logistic_penalize_pred, test_binary$label)
+# calculates the ROC curve
+perf <- performance(roc,"tpr","fpr")
+plot(perf,colorize=TRUE)
+```
+
+```{r}
+performance(roc, measure = "auc")@y.values[[1]]
+```
+
+
+
+```{r}
+# SVM for binary classification
+library(caret)
+set.seed(1)
+turn.grid = expand.grid(C = c(0.01, 0.1, 0.5, 1))
+train_control = trainControl(method="cv", number=10)
+
+svm.linear <- train(y ~ ., 
+                    data = data.frame("x" = binary_train_100[,-1], "y" = as.factor(binary_train_100[,1])),
+                    method = "svmLinear",
+                    preProcess = c("center", "scale"),
+                    tuneGrid = turn.grid,
+                    trControl = train_control)
+
+```
+
+```{r}
+library(kernlab)
+# The best C is 0,01.
+svm.linear.best <- ksvm(x=as.matrix(binary_test_100[,- 1]), 
+                        y=as.factor(binary_test_100[,1]), 
+                        type="C-svc", kernel='vanilladot', C=0.01)
+svm.binary_pred <- predict(svm.linear.best, binary_test_100[,-1])
+table(svm.binary_pred, as.factor(binary_test_100[,1]))
+```
+```{r}
+# testing data accuracy
+sum(diag(table(svm.binary_pred, as.factor(binary_test_100[,1])))) / nrow(binary_test_100)
+```
+
+```{r}
+cost.grid = expand.grid(C = c(0.1, 0.5, 1, 5), sigma = c(0.01, 0.1, 1)) 
+train_control = trainControl(method="repeatedcv", number=10, repeats=3)
+# data = data.frame("x" = binary_train_50[,- 1], "y" = as.factor(binary_train_50[,1])
+svm.radial <- train(label ~ ., data = binary_train_100, 
+                    method = "svmRadial",
+                    preProcess = c("center", "scale"),
+                    tuneGrid = cost.grid,
+                    trControl = train_control)
+svm.radial
+```
+
+```{r}
+svm.radial.best <- ksvm(x=as.matrix(binary_train_100[,-1]), y=as.factor(binary_train_100[,1]), 
+                        kernel=rbfdot(sigma=0.01), C=1)
+
+svm.radial_pred <- predict(svm.radial.best, binary_test_100[,-1])
+table(svm.radial_pred, as.factor(binary_test_100[,1]))
+```
+
+```{r}
+# testing data accuracy
+sum(diag(table(svm.radial_pred, as.factor(binary_test_100[,1])))) / nrow(binary_test_100)
+```
+
+
+```{r}
+allvar = apply(fashion_train[, -1], 2, var)
+cut = sort(allvar, decreasing = TRUE)[100]
+multi_train = fashion_train[, -(which(allvar < cut)+1)]
+multi_test = fashion_test[, -(which(allvar < cut)+1)]
+```
+
+
+```{r}
+library(caret)
+control = trainControl(method = "repeatedcv", number = 5, repeats = 3)
+set.seed(651769293)
+knn.cvfit <- train(y ~ ., method = "knn", 
+                   data = data.frame("x" = multi_train[, 2:101], "y" = as.factor(multi_train[, 1])),
+                   tuneGrid = data.frame(k = seq(1, 20, 1)),
+                   trControl = control)
+```
+
+```{r}
+# plot cross validation result
+plot(knn.cvfit$results$k, 1-knn.cvfit$results$Accuracy, xlab = "K",
+     ylab = "Error",
+     type = "b",
+     pch = 19,
+     col = "darkorange",
+     main = "Cross Validation Error for KNN")
+```
+
+
+```{r}
+library(class)
+
+testpred = knn(train = multi_train_50[, -1], test = multi_test_50[, -1], cl = as.factor(multi_train_50[, 1]), k = 13)
+  
+table(testpred, as.factor(multi_test_50[, 1]))
+```
+
+
+```{r}
+mean(testpred == as.factor(multi_test_50[, 1]))
+```
+
+
+```{r}
+#LDA
+
+library(MASS)
+multi.lda = lda(label ~ ., data = multi_train_50)
+
+multi.lda_predict = predict(multi.lda, multi_test_50)$class
+table(multi.lda_predict, multi_test_50[, 1])
+```
+
+
+```{r}
+mean(multi.lda_predict == as.factor(multi_test_50[, 1]))
+```
+
+
+
